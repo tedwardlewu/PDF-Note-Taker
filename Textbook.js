@@ -1,381 +1,304 @@
-// Firebase Configuration
-const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT.firebaseapp.com",
-    projectId: "YOUR_PROJECT",
-    storageBucket: "YOUR_PROJECT.appspot.com",
-    messagingSenderId: "SENDER_ID",
-    appId: "YOUR_APP_ID"
-};
-
-// Initialize Firebase
-firebase.initializeApp(firebaseConfig);
-const db = firebase.firestore();
-
-// PDF.js Configuration
 const pdfjsLib = window['pdfjs-dist/build/pdf'];
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
 
-// DOM Elements
+const uploadArea = document.getElementById('uploadArea');
 const pdfInput = document.getElementById('pdfInput');
-const mainContent = document.getElementById('mainContent');
-const pdfContainer = document.getElementById('pdfContainer');
+const pdfViewer = document.getElementById('pdfViewer');
+const noPdfMessage = document.getElementById('noPdfMessage');
+const prevPageBtn = document.getElementById('prevPage');
+const nextPageBtn = document.getElementById('nextPage');
+const pageNumElement = document.getElementById('pageNum');
+const pageCountElement = document.getElementById('pageCount');
 const commentsList = document.getElementById('commentsList');
+const commentCount = document.getElementById('commentCount');
+const addCommentBtn = document.getElementById('addCommentBtn');
+const commentText = document.getElementById('commentText');
+const userName = document.getElementById('userName');
+const userButtons = document.querySelectorAll('.user-btn');
 
-// Global Variables
 let pdfDoc = null;
-let comments = [];
-let pdfId = null;
-let isDragging = false;
-let dragStart = { x: 0, y: 0 };
-let dragRect = null;
-let currentPageWrapper = null;
+let pageNum = 1;
+let pageRendering = false;
+let pageNumPending = null;
+let selectedText = '';
+let userRole = 'student';
+let comments = JSON.parse(localStorage.getItem('pdfComments')) || [];
 
-// Generate unique PDF ID
-function generatePDFId(file) {
-    return new Promise(resolve => {
-        const reader = new FileReader();
-        reader.onload = function() {
-            const bytes = new Uint8Array(this.result);
-            let hash = 0;
-            for (let i = 0; i < Math.min(20, bytes.length); i++) {
-                hash = ((hash << 5) - hash) + bytes[i];
-                hash |= 0;
-            }
-            resolve('pdf_' + hash);
-        };
-        reader.readAsArrayBuffer(file.slice(0, 20));
-    });
-}
+// Event listeners
+uploadArea.addEventListener('click', () => pdfInput.click());
+uploadArea.addEventListener('dragover', e => {
+    e.preventDefault();
+    uploadArea.style.background = 'rgba(67, 97, 238, 0.1)';
+});
+uploadArea.addEventListener('dragleave', () => uploadArea.style.background = '');
+uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.style.background = '';
+    if (e.dataTransfer.files[0]) loadPDF(e.dataTransfer.files[0]);
+});
+pdfInput.addEventListener('change', e => {
+    if (e.target.files[0]) loadPDF(e.target.files[0]);
+});
 
-// Load comments from localStorage and Firestore
-function loadComments() {
-    if (!pdfId) return;
-    
-    // Load from localStorage
-    if (localStorage.getItem('pdfComments_' + pdfId)) {
-        const saved = JSON.parse(localStorage.getItem('pdfComments_' + pdfId));
-        comments = saved.map(c => { c.highlight = null; return c; });
-    } else {
-        comments = [];
+prevPageBtn.addEventListener('click', () => {
+        pageNum--;
+        queueRenderPage(pageNum);
+        renderComments();
+    }
+});
+nextPageBtn.addEventListener('click', () => {
+    if (pageNum < pdfDoc.numPages) {
+        pageNum++;
+        queueRenderPage(pageNum);
+        renderComments();
+    }
+});
+
+userButtons.forEach(btn => btn.addEventListener('click', () => {
+    userButtons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    userRole = btn.dataset.role;
+}));
+
+addCommentBtn.addEventListener('click', () => {
+    if (!commentText.value.trim() || !selectedText) {
+        alert('Please highlight an area and enter a comment.');
+        return;
     }
 
-    // Load from Firestore
-    db.collection('pdfComments').doc(pdfId).get().then(doc => {
-        if (doc.exists) {
-            const shared = doc.data().comments.map(c => { c.highlight = null; return c; });
-            comments = [...comments, ...shared.filter(sc => 
-                !comments.some(lc => lc.timestamp === sc.timestamp && lc.user === sc.user)
-            )];
-            renderComments();
-        }
-    });
-}
-
-// Save comments to localStorage and Firestore
-function saveComments() {
-    if (!pdfId) return;
-    
-    const commentsToSave = comments.map(c => ({
-        user: c.user,
-        text: c.text,
-        pageNum: c.pageNum,
-        highlightPos: c.highlightPos,
-        timestamp: c.timestamp
-    }));
-    
-    localStorage.setItem('pdfComments_' + pdfId, JSON.stringify(commentsToSave));
-    
-    db.collection('pdfComments').doc(pdfId).set({
-        comments: commentsToSave
-    });
-}
-
-// PDF Input Event Listener
-pdfInput.addEventListener('change', async e => {
-    const file = e.target.files[0];
-    if (!file || file.type !== 'application/pdf') {
-        return alert('Please select a valid PDF file');
+    let highlightedData;
+    try {
+        highlightedData = JSON.parse(selectedText);
+    } catch {
+        highlightedData = { type: 'text', text: selectedText };
     }
-    
-    pdfId = await generatePDFId(file);
-    loadComments();
 
+    comments.push({
+        user: userName.value || 'Anonymous',
+        role: userRole,
+        text: commentText.value,
+        highlightedData: highlightedData,
+        page: pageNum,
+        timestamp: new Date().toISOString()
+    });
+
+    commentText.value = '';
+    selectedText = '';
+    commentText.placeholder = 'Click and drag on PDF to highlight an area, then add your comment here...';
+    renderComments();
+    saveToLocalStorage();
+});
+
+// PDF functions
+function loadPDF(file) {
     const reader = new FileReader();
     reader.onload = function() {
         const typedarray = new Uint8Array(this.result);
         pdfjsLib.getDocument(typedarray).promise.then(pdf => {
             pdfDoc = pdf;
-            document.getElementById('uploadSection').style.display = 'none';
-            mainContent.style.display = 'block';
-            renderAllPages();
-        }).catch(err => alert('Error loading PDF: ' + err));
+            pageCountElement.textContent = pdf.numPages;
+            noPdfMessage.style.display = 'none';
+            pdfViewer.style.display = 'block';
+            queueRenderPage(pageNum);
+        }).catch(err => {
+            console.error('Error loading PDF:', err);
+            alert('Error loading PDF. Please try a different file.');
+        });
     };
     reader.readAsArrayBuffer(file);
-});
+}
 
-// Render all PDF pages
-function renderAllPages() {
-    pdfContainer.innerHTML = '';
-    const padding = 40;
-    const containerWidth = pdfContainer.clientWidth - padding;
+function queueRenderPage(num) {
+    if (pageRendering) pageNumPending = num;
+    else renderPage(num);
+}
 
-    for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
-        pdfDoc.getPage(pageNum).then(page => {
-            const viewport_orig = page.getViewport({ scale: 1 });
-            const scale = containerWidth / viewport_orig.width;
-            const viewport = page.getViewport({ scale });
+function renderPage(num) {
+    pageRendering = true;
+    pdfDoc.getPage(num).then(page => {
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        canvas.style.cursor = 'crosshair';
 
-            const pageWrapper = document.createElement('div');
-            pageWrapper.style.position = 'relative';
-            pageWrapper.style.margin = '10px auto';
-            pageWrapper.style.width = viewport.width + 'px';
-            pdfContainer.appendChild(pageWrapper);
-            currentPageWrapper = pageWrapper;
+        pdfViewer.innerHTML = '';
+        pdfViewer.appendChild(canvas);
 
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            pageWrapper.appendChild(canvas);
-            page.render({ canvasContext: ctx, viewport });
+        page.render({canvasContext: ctx, viewport: viewport}).promise.then(() => {
+            pageRendering = false;
+            pageNumElement.textContent = num;
 
-            // Add existing highlights
-            comments.filter(c => c.pageNum === pageNum).forEach(c => {
-                const highlight = document.createElement('div');
-                highlight.className = 'highlight';
-                highlight.style.left = c.highlightPos.left + 'px';
-                highlight.style.top = c.highlightPos.top + 'px';
-                highlight.style.width = c.highlightPos.width + 'px';
-                highlight.style.height = c.highlightPos.height + 'px';
-                highlight.style.display = 'none';
-                pageWrapper.appendChild(highlight);
-                c.highlight = highlight;
-            });
+            if (pageNumPending !== null) {
+                renderPage(pageNumPending);
+                pageNumPending = null;
+            }
 
-            // Add event listeners for highlighting
-            setupPageEventListeners(pageWrapper, pageNum);
+            enableAreaHighlighting(canvas, page, viewport);
+            renderComments();
         });
-    }
-    renderComments();
-}
-
-// Setup event listeners for page highlighting
-function setupPageEventListeners(pageWrapper, pageNum) {
-    pageWrapper.addEventListener('mousedown', e => {
-        if (e.button !== 0) return;
-        isDragging = true;
-        dragStart = { x: e.offsetX, y: e.offsetY };
-        dragRect = document.createElement('div');
-        dragRect.className = 'highlight';
-        dragRect.style.left = dragStart.x + 'px';
-        dragRect.style.top = dragStart.y + 'px';
-        dragRect.style.width = '0px';
-        dragRect.style.height = '0px';
-        pageWrapper.appendChild(dragRect);
-    });
-
-    pageWrapper.addEventListener('mousemove', e => {
-        if (!isDragging) return;
-        const x = Math.min(e.offsetX, dragStart.x);
-        const y = Math.min(e.offsetY, dragStart.y);
-        const w = Math.abs(e.offsetX - dragStart.x);
-        const h = Math.abs(e.offsetY - dragStart.y);
-        dragRect.style.left = x + 'px';
-        dragRect.style.top = y + 'px';
-        dragRect.style.width = w + 'px';
-        dragRect.style.height = h + 'px';
-    });
-
-    pageWrapper.addEventListener('mouseup', e => {
-        if (!isDragging) return;
-        isDragging = false;
-        showCommentDialog(pageWrapper, pageNum);
     });
 }
 
-// Show comment dialog
-function showCommentDialog(pageWrapper, pageNum) {
-    const floatingBox = document.createElement('div');
-    floatingBox.className = 'floating-comment';
-    floatingBox.innerHTML = `
-        <span class="close-btn">×</span>
-        <input type="text" placeholder="Name" class="comment-input"><br>
-        <textarea placeholder="Enter comment" class="comment-textarea"></textarea><br>
-        <button id="addCommentBtn">Add Comment</button>
-        <button id="aiAnalyzeBtn" style="margin-top:4px;">Analyze with AI</button>
-    `;
-    document.body.appendChild(floatingBox);
+function enableAreaHighlighting(canvas, page, viewport) {
+    let isDrawing = false;
+    let startX, startY;
 
-    const closeBtn = floatingBox.querySelector('.close-btn');
-    const nameInput = floatingBox.querySelector('input');
-    const textInput = floatingBox.querySelector('textarea');
-    const addBtn = floatingBox.querySelector('#addCommentBtn');
-    const aiBtn = floatingBox.querySelector('#aiAnalyzeBtn');
+    // Create highlight layer
+    const highlightLayer = document.createElement('div');
+    highlightLayer.className = 'highlight-layer';
+    highlightLayer.style.left = '0px';
+    highlightLayer.style.top = '0px';
+    highlightLayer.style.width = canvas.width + 'px';
+    highlightLayer.style.height = canvas.height + 'px';
+    pdfViewer.appendChild(highlightLayer);
 
-    closeBtn.addEventListener('click', () => {
-        floatingBox.remove();
-        dragRect.remove();
-        dragRect = null;
-    });
+    // Create selection rectangle
+    const selectionRect = document.createElement('div');
+    selectionRect.className = 'selection-rect';
+    selectionRect.style.display = 'none';
+    highlightLayer.appendChild(selectionRect);
 
-    addBtn.addEventListener('click', () => {
-        addComment(pageWrapper, pageNum, nameInput.value, textInput.value);
-        floatingBox.remove();
-        dragRect.remove();
-        dragRect = null;
-    });
-
-    aiBtn.addEventListener('click', async () => {
-        await analyzeWithAI(pageWrapper, pageNum, nameInput.value, floatingBox);
-    });
-}
-
-// Add comment function
-function addComment(pageWrapper, pageNum, userName, commentText) {
-    const highlight = document.createElement('div');
-    highlight.className = 'highlight';
-    highlight.style.left = dragRect.style.left;
-    highlight.style.top = dragRect.style.top;
-    highlight.style.width = dragRect.style.width;
-    highlight.style.height = dragRect.style.height;
-    highlight.style.display = 'none';
-    pageWrapper.appendChild(highlight);
-
-    const commentObj = {
-        user: userName || 'Anonymous',
-        text: commentText || '(No text)',
-        highlight: highlight,
-        pageWrapper: pageWrapper,
-        pageNum: pageNum,
-        highlightPos: {
-            left: parseFloat(dragRect.style.left),
-            top: parseFloat(dragRect.style.top),
-            width: parseFloat(dragRect.style.width),
-            height: parseFloat(dragRect.style.height)
-        },
-        timestamp: new Date().toLocaleString()
+    // Mouse events
+    canvas.onmousedown = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        startX = e.clientX - rect.left;
+        startY = e.clientY - rect.top;
+        
+        isDrawing = true;
+        selectionRect.style.display = 'block';
+        selectionRect.style.left = startX + 'px';
+        selectionRect.style.top = startY + 'px';
+        selectionRect.style.width = '0px';
+        selectionRect.style.height = '0px';
     };
-    comments.push(commentObj);
-    saveComments();
-    renderComments();
-}
 
-// AI Analysis function
-async function analyzeWithAI(pageWrapper, pageNum, userName, floatingBox) {
-    const aiBtn = floatingBox.querySelector('#aiAnalyzeBtn');
-    aiBtn.innerText = 'Analyzing...';
-    
-    try {
-        const selectedText = `Text from PDF at page ${pageNum}: ...`; // You would extract text from highlight here
+    canvas.onmousemove = (e) => {
+        if (!isDrawing) return;
         
-        const response = await fetch('/analyze', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: selectedText })
+        const rect = canvas.getBoundingClientRect();
+        const currentX = e.clientX - rect.left;
+        const currentY = e.clientY - rect.top;
+        
+        const width = currentX - startX;
+        const height = currentY - startY;
+        
+        selectionRect.style.width = Math.abs(width) + 'px';
+        selectionRect.style.height = Math.abs(height) + 'px';
+        selectionRect.style.left = (width < 0 ? currentX : startX) + 'px';
+        selectionRect.style.top = (height < 0 ? currentY : startY) + 'px';
+    };
+
+    canvas.onmouseup = (e) => {
+        if (!isDrawing) return;
+        
+        isDrawing = false;
+        const rect = canvas.getBoundingClientRect();
+        const endX = e.clientX - rect.left;
+        const endY = e.clientY - rect.top;
+        
+        // Only create highlight if area is big enough
+        if (Math.abs(endX - startX) > 5 && Math.abs(endY - startY) > 5) {
+            createPermanentHighlight(startX, startY, endX, endY, highlightLayer);
+            commentText.placeholder = 'Add a comment for this highlighted area...';
+            commentText.focus();
+        }
+        
+        selectionRect.style.display = 'none';
+    };
+
+    function createPermanentHighlight(x1, y1, x2, y2, layer) {
+        const highlight = document.createElement('div');
+        highlight.className = 'permanent-highlight';
+        highlight.style.left = Math.min(x1, x2) + 'px';
+        highlight.style.top = Math.min(y1, y2) + 'px';
+        highlight.style.width = Math.abs(x2 - x1) + 'px';
+        highlight.style.height = Math.abs(y2 - y1) + 'px';
+        
+        layer.appendChild(highlight);
+        
+        // Store highlight coordinates
+        selectedText = JSON.stringify({
+            type: 'area',
+            coords: { x1, y1, x2, y2 },
+            page: pageNum
         });
-        
-        const data = await response.json();
-        const aiCommentObj = {
-            user: 'AI Analysis',
-            text: data.result || '(No response)',
-            highlight: null,
-            pageWrapper: pageWrapper,
-            pageNum: pageNum,
-            highlightPos: null,
-            timestamp: new Date().toLocaleString()
-        };
-        
-        comments.push(aiCommentObj);
-        saveComments();
-        renderComments();
-        floatingBox.remove();
-        dragRect.remove();
-        dragRect = null;
-    } catch (err) {
-        alert('AI analysis failed: ' + err);
-        aiBtn.innerText = 'Analyze with AI';
     }
 }
 
-// Render comments in sidebar
 function renderComments() {
     commentsList.innerHTML = '';
+    const filtered = comments.filter(c => c.page === pageNum);
     
-    if (!comments.length) {
-        commentsList.innerHTML = '<p class="no-comments">No comments yet</p>';
-        return;
-    }
-
-    comments.forEach((comment, index) => {
-        const commentElement = createCommentElement(comment, index);
-        commentsList.appendChild(commentElement);
-    });
-}
-
-// Create individual comment element
-function createCommentElement(comment, index) {
-    const div = document.createElement('div');
-    div.className = 'comment-item';
-    div.innerHTML = `
-        <strong>${comment.user}</strong> (${comment.timestamp})<br>
-        <span class="comment-text">${comment.text}</span>
-        <em>Click to view</em>
-    `;
-
-    const deleteBtn = document.createElement('span');
-    deleteBtn.className = 'delete-btn';
-    deleteBtn.innerHTML = '🗑';
-    deleteBtn.title = 'Delete Comment';
-    
-    deleteBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        deleteComment(index);
-    });
-    
-    div.appendChild(deleteBtn);
-
-    div.addEventListener('click', () => {
-        highlightComment(comment);
-    });
-
-    return div;
-}
-
-// Delete comment function
-function deleteComment(index) {
-    if (comments[index].highlight) {
-        comments[index].highlight.remove();
-    }
-    comments.splice(index, 1);
-    saveComments();
-    renderComments();
-}
-
-// Highlight comment in PDF
-function highlightComment(comment) {
-    // Hide all other highlights
-    comments.forEach(other => {
-        if (other !== comment && other.highlight) {
-            other.highlight.style.display = 'none';
-        }
-    });
-    
-    // Show current highlight
-    if (comment.highlight) {
-        if (comment.highlight.style.display === 'none') {
-            comment.highlight.style.display = 'block';
-            comment.highlight.classList.add('active');
-            
-            // Scroll to highlight
-            const containerRect = pdfContainer.getBoundingClientRect();
-            const highlightRect = comment.highlight.getBoundingClientRect();
-            const offset = highlightRect.top - containerRect.top - containerRect.height / 2 + highlightRect.height / 2;
-            pdfContainer.scrollBy({ top: offset, behavior: 'smooth' });
-            
-            setTimeout(() => comment.highlight.classList.remove('active'), 1500);
+    filtered.forEach((comment, index) => {
+        const div = document.createElement('div');
+        div.className = `comment ${comment.role === 'professor' ? 'professor' : ''}`;
+        
+        let highlightText = '';
+        if (comment.highlightedData.type === 'area') {
+            highlightText = `Area highlight on page ${comment.page}`;
         } else {
-            comment.highlight.style.display = 'none';
+            highlightText = `"${comment.highlightedData.text}"`;
+        }
+        
+        div.innerHTML = `
+            <div class="comment-header">
+                <span><strong>${comment.user}</strong></span>
+                <span class="user-type ${comment.role==='professor'?'professor-tag':''}">${comment.role === 'professor' ? 'Professor':'Student'}</span>
+            </div>
+            <p>${comment.text}</p>
+            <p class="highlighted-text">${highlightText}</p>
+            <button class="view-highlight-btn" data-index="${index}">View Highlight</button>
+        `;
+        commentsList.appendChild(div);
+    });
+    
+    // Add event listeners for view highlight buttons
+    document.querySelectorAll('.view-highlight-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const index = parseInt(e.target.dataset.index);
+            const comment = comments.filter(c => c.page === pageNum)[index];
+            viewHighlight(comment);
+        });
+    });
+    
+    commentCount.textContent = `${filtered.length} comments`;
+}
+
+function viewHighlight(comment) {
+    if (comment.highlightedData.type === 'area' && comment.page === pageNum) {
+        const coords = comment.highlightedData.coords;
+        
+        // Remove any existing indicators
+        const existingIndicators = document.querySelectorAll('.highlight-indicator');
+        existingIndicators.forEach(ind => ind.remove());
+        
+        // Create a temporary indicator
+        const indicator = document.createElement('div');
+        indicator.className = 'highlight-indicator';
+        indicator.style.left = Math.min(coords.x1, coords.x2) + 'px';
+        indicator.style.top = Math.min(coords.y1, coords.y2) + 'px';
+        indicator.style.width = Math.abs(coords.x2 - coords.x1) + 'px';
+        indicator.style.height = Math.abs(coords.y2 - coords.y1) + 'px';
+        
+        const highlightLayer = document.querySelector('.highlight-layer');
+        if (highlightLayer) {
+            highlightLayer.appendChild(indicator);
+            
+            // Remove after 3 seconds
+            setTimeout(() => {
+                if (indicator.parentNode) {
+                    indicator.parentNode.removeChild(indicator);
+                }
+            }, 3000);
         }
     }
 }
+
+function saveToLocalStorage() {
+    localStorage.setItem('pdfComments', JSON.stringify(comments));
+}
+
+// Initialize comments display
+renderComments();

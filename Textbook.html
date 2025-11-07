@@ -1,272 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>PDF Commenter & AI Sidebar</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-body { display:flex; background:#f0f2f5; min-height:100vh; padding:20px; }
-#uploadSection { text-align:center; width:100%; margin-bottom:20px; }
-#pdfInput { padding:12px 18px; border:2px dashed #3498db; border-radius:8px; background:white; cursor:pointer; font-size:16px; }
-#pdfInput:hover { background:#e8f4ff; border-color:#2980b9; }
-#mainContent { display:flex; width:100%; }
-#pdfContainer { flex:3; max-width:75%; max-height:95vh; overflow:auto; background:white; border-radius:10px; border:1px solid #ccc; box-shadow:0 8px 25px rgba(0,0,0,0.2); padding:20px; position:relative; }
-#pdfContainer > div { position:relative; margin:0 auto 30px auto; background:white; border-radius:6px; overflow:hidden; width:100%; }
-#pdfContainer canvas { display:block; margin:0 auto; max-width:100%; height:auto; }
-.highlight { position:absolute; background:rgba(255,255,0,0.4); border:1px solid rgba(255,204,0,0.6); z-index:10; cursor:pointer; transition: all 0.2s ease; display:none; }
-.highlight.active { outline:2px solid #3498db; background:rgba(255,255,0,0.6); }
-.floatingComment { position:fixed; left:50%; top:50%; transform:translate(-50%, -50%); background:white; border:1px solid #3498db; border-radius:6px; padding:12px; box-shadow:0 4px 12px rgba(0,0,0,0.2); z-index:999; }
-.floatingComment .closeBtn { position:absolute; top:4px; right:6px; cursor:pointer; font-weight:bold; font-size:16px; color:#3498db; }
-#sidebar { flex:1; margin-left:20px; max-width:25%; background:white; border-radius:8px; padding:15px; box-shadow:0 4px 20px rgba(0,0,0,0.1); height:95vh; overflow-y:auto; }
-#sidebar h3 { margin-bottom:10px; color:#3498db; }
-.commentItem { border-bottom:1px solid #eee; padding:8px 0; cursor:pointer; transition:background 0.2s; position:relative; }
-.commentItem:hover { background:#f0f8ff; }
-.commentItem:last-child { border-bottom:none; }
-.commentItem strong { color:#2c3e50; }
-.commentItem em { display:block; color:#555; font-size:13px; margin-top:4px; }
-.commentItem .deleteBtn { position:absolute; bottom:4px; right:4px; cursor:pointer; font-size:14px; color:#e74c3c; }
-.commentItem .deleteBtn:hover { color:#c0392b; }
-</style>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Highlighter with Area Selection</title>
+    <link rel="stylesheet" href="Textbook.css">
 </head>
 <body>
+    <div class="container">
+        <header>
+            <div class="logo">PDF Area Highlighter</div>
+            <div>Click and drag to highlight areas on PDFs</div>
+        </header>
 
-<div style="flex:3;">
-  <div id="uploadSection">
-    <input type="file" id="pdfInput" accept="application/pdf">
-  </div>
-  <div id="mainContent" style="display:none;">
-    <div id="pdfContainer"></div>
-  </div>
-</div>
+        <div class="upload-section">
+            <div class="upload-area" id="uploadArea">
+                <h3>Upload Your PDF</h3>
+                <p>Click here or drag and drop a PDF file</p>
+                <input type="file" id="pdfInput" accept=".pdf" style="display: none;">
+            </div>
+            <p class="highlight-instructions">Click and drag on the PDF to create highlight areas</p>
+        </div>
 
-<div id="sidebar">
-  <h3>Comments & AI Analysis</h3>
-  <div id="commentsList"><p style="color:#666;">No comments yet</p></div>
-</div>
+        <div class="main-content">
+            <div class="pdf-viewer">
+                <div class="pdf-container" id="pdfContainer">
+                    <div class="no-pdf-message" id="noPdfMessage">
+                        <h3>No PDF loaded</h3>
+                        <p>Please upload a PDF to get started</p>
+                    </div>
+                    <div id="pdfViewer" style="display: none;"></div>
+                </div>
+                <div class="page-navigation">
+                    <button class="page-btn" id="prevPage">Previous Page</button>
+                    <div class="page-info">
+                        Page: <span id="pageNum">1</span> / <span id="pageCount">0</span>
+                    </div>
+                    <button class="page-btn" id="nextPage">Next Page</button>
+                </div>
+            </div>
 
-<script>
-const pdfjsLib = window['pdfjs-dist/build/pdf'];
-pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+            <div class="comments-section">
+                <div class="comments-header">
+                    <h3>Comments</h3>
+                    <span id="commentCount">0 comments</span>
+                </div>
+                <div class="comments-list" id="commentsList"></div>
 
-const pdfInput = document.getElementById('pdfInput');
-const mainContent = document.getElementById('mainContent');
-const pdfContainer = document.getElementById('pdfContainer');
-const commentsList = document.getElementById('commentsList');
+                <div class="add-comment-section">
+                    <div class="user-selection">
+                        <button class="user-btn active" data-role="student">Student</button>
+                        <button class="user-btn" data-role="professor">Professor</button>
+                    </div>
+                    <div class="comment-form">
+                        <input type="text" id="userName" placeholder="Your name" value="Anonymous">
+                        <textarea id="commentText" placeholder="Click and drag on PDF to highlight an area, then add your comment here..."></textarea>
+                        <button id="addCommentBtn">Add Comment</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-let pdfDoc = null;
-let comments = [];
-let currentFileName = '';
-
-function loadComments(pdfName){
-  const saved = localStorage.getItem('pdfComments_'+pdfName);
-  return saved ? JSON.parse(saved) : [];
-}
-
-function saveComments(pdfName){
-  localStorage.setItem('pdfComments_'+pdfName, JSON.stringify(comments));
-}
-
-pdfInput.addEventListener('change', e=>{
-  const file = e.target.files[0];
-  if(!file || file.type!=='application/pdf') return alert('Select a valid PDF');
-  currentFileName = file.name;
-
-  const reader = new FileReader();
-  reader.onload = function(){
-    const typedarray = new Uint8Array(this.result);
-    pdfjsLib.getDocument(typedarray).promise.then(pdf=>{
-      pdfDoc = pdf;
-      document.getElementById('uploadSection').style.display='none';
-      mainContent.style.display='flex';
-      comments = loadComments(currentFileName);
-      pdfContainer.innerHTML = '';
-      renderAllPages();
-    }).catch(err=>alert('Error loading PDF: '+err));
-  };
-  reader.readAsArrayBuffer(file);
-});
-
-// Render all pages in parallel
-function renderAllPages(){
-  const renderPromises = [];
-  for(let i=1;i<=pdfDoc.numPages;i++){
-    renderPromises.push(pdfDoc.getPage(i).then(page=>{
-      const containerWidth = pdfContainer.clientWidth - 40;
-      const viewport_orig = page.getViewport({scale:1});
-      const scale = containerWidth / viewport_orig.width;
-      const viewport = page.getViewport({scale});
-
-      const pageWrapper = document.createElement('div');
-      pageWrapper.style.position='relative';
-      pageWrapper.style.margin='10px auto';
-      pageWrapper.style.width = viewport.width+'px';
-      pdfContainer.appendChild(pageWrapper);
-
-      const canvas = document.createElement('canvas');
-      canvas.width = viewport.width;
-      canvas.height = viewport.height;
-      pageWrapper.appendChild(canvas);
-
-      return page.render({canvasContext:canvas.getContext('2d'), viewport}).promise.then(()=>{
-        pageWrapper.dataset.pageNum = page.pageNumber;
-        return pageWrapper;
-      });
-    }));
-  }
-
-  Promise.all(renderPromises).then(pageWrappers=>{
-    attachAllHighlights(pageWrappers);
-    renderComments();
-  });
-}
-
-// Attach saved highlights after all pages rendered
-function attachAllHighlights(pageWrappers){
-  comments.forEach(c=>{
-    const wrapper = Array.from(pageWrappers).find(w=>parseInt(w.dataset.pageNum) === c.pageNum);
-    if(!wrapper) return;
-    const h = document.createElement('div');
-    h.className='highlight';
-    h.style.left = c.highlightPos.left+'px';
-    h.style.top = c.highlightPos.top+'px';
-    h.style.width = c.highlightPos.width+'px';
-    h.style.height = c.highlightPos.height+'px';
-    wrapper.appendChild(h);
-    c.domHighlight = h;
-    attachHighlightEvents(wrapper, c.pageNum, true);
-  });
-}
-
-// Highlight drawing logic
-let isDragging=false, dragStart={}, dragRect=null;
-function attachHighlightEvents(wrapper, pageNum, saved=false){
-  if(saved) return; // no need to reattach for saved highlights
-
-  wrapper.addEventListener('mousedown', e=>{
-    if(e.button!==0) return;
-    isDragging=true;
-    dragStart={x:e.offsetX,y:e.offsetY};
-    dragRect=document.createElement('div');
-    dragRect.className='highlight';
-    dragRect.style.left=dragStart.x+'px';
-    dragRect.style.top=dragStart.y+'px';
-    dragRect.style.width='0px';
-    dragRect.style.height='0px';
-    wrapper.appendChild(dragRect);
-  });
-
-  wrapper.addEventListener('mousemove', e=>{
-    if(!isDragging) return;
-    const x=Math.min(e.offsetX,dragStart.x);
-    const y=Math.min(e.offsetY,dragStart.y);
-    const w=Math.abs(e.offsetX-dragStart.x);
-    const h=Math.abs(e.offsetY-dragStart.y);
-    dragRect.style.left=x+'px';
-    dragRect.style.top=y+'px';
-    dragRect.style.width=w+'px';
-    dragRect.style.height=h+'px';
-  });
-
-  wrapper.addEventListener('mouseup', e=>{
-    if(!isDragging) return;
-    isDragging=false;
-    const floatingBox = document.createElement('div');
-    floatingBox.className='floatingComment';
-    floatingBox.innerHTML=`
-      <span class="closeBtn">×</span>
-      <input type="text" placeholder="Name" style="width:120px;margin-bottom:4px;"><br>
-      <textarea placeholder="Enter comment" style="width:180px;height:50px;margin-bottom:4px;"></textarea><br>
-      <button>Add Comment</button>
-    `;
-    document.body.appendChild(floatingBox);
-
-    const closeBtn=floatingBox.querySelector('.closeBtn');
-    const nameInput=floatingBox.querySelector('input');
-    const textInput=floatingBox.querySelector('textarea');
-    const addBtn=floatingBox.querySelector('button');
-
-    closeBtn.addEventListener('click', ()=>{
-      floatingBox.remove();
-      dragRect.remove();
-      dragRect=null;
-    });
-
-    addBtn.addEventListener('click', ()=>{
-      const highlight = document.createElement('div');
-      highlight.className='highlight';
-      highlight.style.left=dragRect.style.left;
-      highlight.style.top=dragRect.style.top;
-      highlight.style.width=dragRect.style.width;
-      highlight.style.height=dragRect.style.height;
-      wrapper.appendChild(highlight);
-
-      const commentObj = {
-        id: Date.now()+'-'+Math.random(),
-        user: nameInput.value||'Anonymous',
-        text: textInput.value||'(No text)',
-        pageNum: pageNum,
-        domHighlight: highlight,
-        highlightPos:{
-          left:parseFloat(dragRect.style.left),
-          top:parseFloat(dragRect.style.top),
-          width:parseFloat(dragRect.style.width),
-          height:parseFloat(dragRect.style.height)
-        },
-        timestamp: new Date().toLocaleString()
-      };
-      comments.push(commentObj);
-      saveComments(currentFileName);
-      floatingBox.remove();
-      dragRect.remove();
-      dragRect=null;
-      renderComments();
-    });
-  });
-}
-
-// Sidebar comment list
-function renderComments(){
-  commentsList.innerHTML='';
-  if(!comments.length){ 
-    commentsList.innerHTML='<p style="color:#666;">No comments yet</p>'; 
-    return; 
-  }
-
-  comments.forEach(c=>{
-    const div = document.createElement('div');
-    div.className='commentItem';
-    div.innerHTML=`<strong>${c.user}</strong> (${c.timestamp})<br>${c.text}<br><em>Click to view</em><span class="deleteBtn">×</span>`;
-
-    div.querySelector('.deleteBtn').addEventListener('click', e=>{
-      e.stopPropagation();
-      if(c.domHighlight && c.domHighlight.parentNode) c.domHighlight.remove();
-      comments = comments.filter(item=>item!==c);
-      saveComments(currentFileName);
-      renderComments();
-    });
-
-    div.addEventListener('click', ()=>{
-      if(!c.domHighlight) return;
-      const isVisible = c.domHighlight.style.display==='block';
-      comments.forEach(other=>{
-        if(other.domHighlight) other.domHighlight.style.display='none';
-      });
-      c.domHighlight.style.display = isVisible ? 'none' : 'block';
-      if(!isVisible){
-        c.domHighlight.classList.add('active');
-        const containerRect = pdfContainer.getBoundingClientRect();
-        const highlightRect = c.domHighlight.getBoundingClientRect();
-        const offset = highlightRect.top - containerRect.top - containerRect.height/2 + highlightRect.height/2;
-        pdfContainer.scrollBy({top:offset, behavior:'smooth'});
-        setTimeout(()=>c.domHighlight.classList.remove('active'),1500);
-      }
-    });
-
-    commentsList.appendChild(div);
-  });
-}
-</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="Textbook.js"></script>
 </body>
 </html>

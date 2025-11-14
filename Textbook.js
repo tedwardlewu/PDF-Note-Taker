@@ -24,7 +24,6 @@ let selectedText = '';
 let userRole = 'student';
 let comments = JSON.parse(localStorage.getItem('pdfComments')) || [];
 
-// Event listeners
 uploadArea.addEventListener('click', () => pdfInput.click());
 uploadArea.addEventListener('dragover', e => {
     e.preventDefault();
@@ -45,7 +44,7 @@ prevPageBtn.addEventListener('click', () => {
         queueRenderPage(pageNum);
         renderComments();
     }
-});
+);
 nextPageBtn.addEventListener('click', () => {
     if (pageNum < pdfDoc.numPages) {
         pageNum++;
@@ -89,7 +88,6 @@ addCommentBtn.addEventListener('click', () => {
     saveToLocalStorage();
 });
 
-// PDF functions
 function loadPDF(file) {
     const reader = new FileReader();
     reader.onload = function() {
@@ -145,7 +143,6 @@ function enableAreaHighlighting(canvas, page, viewport) {
     let isDrawing = false;
     let startX, startY;
 
-    // Create highlight layer
     const highlightLayer = document.createElement('div');
     highlightLayer.className = 'highlight-layer';
     highlightLayer.style.left = '0px';
@@ -154,13 +151,11 @@ function enableAreaHighlighting(canvas, page, viewport) {
     highlightLayer.style.height = canvas.height + 'px';
     pdfViewer.appendChild(highlightLayer);
 
-    // Create selection rectangle
     const selectionRect = document.createElement('div');
     selectionRect.className = 'selection-rect';
     selectionRect.style.display = 'none';
     highlightLayer.appendChild(selectionRect);
 
-    // Mouse events
     canvas.onmousedown = (e) => {
         const rect = canvas.getBoundingClientRect();
         startX = e.clientX - rect.left;
@@ -198,7 +193,6 @@ function enableAreaHighlighting(canvas, page, viewport) {
         const endX = e.clientX - rect.left;
         const endY = e.clientY - rect.top;
         
-        // Only create highlight if area is big enough
         if (Math.abs(endX - startX) > 5 && Math.abs(endY - startY) > 5) {
             createPermanentHighlight(startX, startY, endX, endY, highlightLayer);
             commentText.placeholder = 'Add a comment for this highlighted area...';
@@ -218,7 +212,6 @@ function enableAreaHighlighting(canvas, page, viewport) {
         
         layer.appendChild(highlight);
         
-        // Store highlight coordinates
         selectedText = JSON.stringify({
             type: 'area',
             coords: { x1, y1, x2, y2 },
@@ -254,7 +247,7 @@ function renderComments() {
         commentsList.appendChild(div);
     });
     
-    // Add event listeners for view highlight buttons
+
     document.querySelectorAll('.view-highlight-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const index = parseInt(e.target.dataset.index);
@@ -270,11 +263,11 @@ function viewHighlight(comment) {
     if (comment.highlightedData.type === 'area' && comment.page === pageNum) {
         const coords = comment.highlightedData.coords;
         
-        // Remove any existing indicators
+     
         const existingIndicators = document.querySelectorAll('.highlight-indicator');
         existingIndicators.forEach(ind => ind.remove());
         
-        // Create a temporary indicator
+      
         const indicator = document.createElement('div');
         indicator.className = 'highlight-indicator';
         indicator.style.left = Math.min(coords.x1, coords.x2) + 'px';
@@ -286,7 +279,7 @@ function viewHighlight(comment) {
         if (highlightLayer) {
             highlightLayer.appendChild(indicator);
             
-            // Remove after 3 seconds
+          
             setTimeout(() => {
                 if (indicator.parentNode) {
                     indicator.parentNode.removeChild(indicator);
@@ -300,5 +293,4 @@ function saveToLocalStorage() {
     localStorage.setItem('pdfComments', JSON.stringify(comments));
 }
 
-// Initialize comments display
 renderComments();
